@@ -90,6 +90,10 @@ class MPCAvoidanceController(Controller):
         self._tick = 0
         self._finished = False
         
+        # For sequential waypoint updates
+        self._last_obstacle_count = 0
+        self._last_updated_gates = set()  # Track which gates have been updated
+        
         print("="*60)
         print(f"MPC horizon: {self._mpc_horizon} steps ({self._mpc_horizon * self._dt:.2f}s)")
         print(f"Sample directions: {self._mpc_sample_directions}")
@@ -456,9 +460,12 @@ class MPCAvoidanceController(Controller):
         truncated: bool,
         info: dict,
     ) -> bool:
-        """Update detections and waypoints."""
+        """Update detections and waypoints sequentially."""
         self._tick += 1
         current_pos = obs['pos']
+        
+        # Track newly detected gates (don't update immediately)
+        newly_detected_gates = []
         
         # Detect gates
         if 'gates_pos' in obs and 'gates_quat' in obs:
@@ -472,23 +479,53 @@ class MPCAvoidanceController(Controller):
                             'pos': gate_pos.copy(),
                             'normal': gate_normal.copy()
                         }
+                        newly_detected_gates.append(i)
                         
                         print(f"\n[GATE {i} DETECTED at tick {self._tick}]")
                         print(f"  Position: {gate_pos}")
-                        
-                        # Update waypoints for this gate
-                        self._update_gate_waypoints(i, gate_pos, gate_normal)
         
         # Detect obstacles
+        newly_detected_obstacles = False
         if 'obstacles_pos' in obs:
             for i, obs_pos in enumerate(obs['obstacles_pos']):
                 if i not in self._detected_obstacles:
-                    if np.linalg.norm(obs_pos[:2]  - current_pos[:2]) <= self._sensor_range:
+                    if np.linalg.norm(obs_pos[:2] - current_pos[:2]) <= self._sensor_range:
                         self._detected_obstacles[i] = {
                             'pos': obs_pos.copy()
                         }
+                        newly_detected_obstacles = True
                         print(f"\n[OBSTACLE {i} DETECTED at tick {self._tick}]")
         
+        # Sequential waypoint update logic
+        # Update waypoints in order, only when all previous gates are detected
+        if newly_detected_gates or newly_detected_obstacles:
+            detected_gate_indices = sorted(self._detected_gates.keys())
+            
+            for gate_idx in detected_gate_indices:
+                # Check if all previous gates are detected
+                all_previous_detected = all(
+                    prev_idx in self._detected_gates 
+                    for prev_idx in range(gate_idx)
+                )
+                
+                # Update if: (1) it's the first gate, OR (2) all previous gates detected
+                # AND either: (a) gate just detected, OR (b) new obstacle detected
+                should_update = (gate_idx == 0 or all_previous_detected) and (
+                    gate_idx in newly_detected_gates or 
+                    (newly_detected_obstacles and gate_idx in self._last_updated_gates)
+                )
+                
+                if should_update:
+                    gate_info = self._detected_gates[gate_idx]
+                    self._update_gate_waypoints(
+                        gate_idx, 
+                        gate_info['pos'], 
+                        gate_info['normal']
+                    )
+                    self._last_updated_gates.add(gate_idx)
+                    print(f"  → Updated waypoints for Gate {gate_idx} (sequential order)")
+        
+        self._last_obstacle_count = len(self._detected_obstacles)
         return self._finished
 
     def _update_gate_waypoints(self, gate_idx: int, gate_pos: np.ndarray, 
@@ -501,7 +538,7 @@ class MPCAvoidanceController(Controller):
             
             # Approach waypoint
             approach_target = self._generate_safe_approach_exit(
-                gate_pos, -gate_normal, 0.8, detected_obstacles
+                gate_pos, -gate_normal, 0.7, detected_obstacles
             )
             self._waypoint_targets[base_idx] = approach_target
             
@@ -510,7 +547,7 @@ class MPCAvoidanceController(Controller):
             
             # Exit waypoint (increased distance for safety)
             exit_target = self._generate_safe_approach_exit(
-                gate_pos, gate_normal, 0.8, detected_obstacles
+                gate_pos, gate_normal, 0.7, detected_obstacles
             )
             self._waypoint_targets[base_idx + 2] = exit_target
             
@@ -527,3 +564,7 @@ class MPCAvoidanceController(Controller):
         self._active_gate_idx = None
         self._current_waypoints = self._original_waypoints.copy()
         self._update_trajectory()
+        
+        # Reset sequential update tracking
+        self._last_obstacle_count = 0
+        self._last_updated_gates.clear()
