@@ -66,7 +66,7 @@ class MPCAvoidanceController(Controller):
         # Obstacle avoidance parameters - XY plane distances
         self._obstacle_influence_radius = 0.6
         self._obstacle_danger_radius = 0.3  # obstacle(10cm) + drone(10cm)
-        self._gate_corridor_width = 0.4
+        self._gate_corridor_width = 0.8
         self._gate_corridor_length = 0.6  # Reduced from 1.5m to avoid overlap
         
         # Tracking parameters
@@ -538,7 +538,7 @@ class MPCAvoidanceController(Controller):
             
             # Approach waypoint
             approach_target = self._generate_safe_approach_exit(
-                gate_pos, -gate_normal, 0.7, detected_obstacles
+                gate_pos, -gate_normal, 0.8, detected_obstacles
             )
             self._waypoint_targets[base_idx] = approach_target
             
@@ -547,7 +547,7 @@ class MPCAvoidanceController(Controller):
             
             # Exit waypoint (increased distance for safety)
             exit_target = self._generate_safe_approach_exit(
-                gate_pos, gate_normal, 0.7, detected_obstacles
+                gate_pos, gate_normal, 0.8, detected_obstacles
             )
             self._waypoint_targets[base_idx + 2] = exit_target
             
