@@ -59,23 +59,23 @@ class MPCAvoidanceController(Controller):
             })
         
         # MPC parameters
-        self._mpc_horizon = 15  # prediction steps (0.3 seconds ahead)
-        self._mpc_sample_directions = 12  # number of directions to sample
-        self._mpc_sample_distances = [0.05, 0.10, 0.15, 0.20]  # meters
+        self._mpc_horizon = 15
+        self._mpc_sample_directions = 16
+        self._mpc_sample_distances = [0.05, 0.10, 0.15, 0.20]
         
-        # Obstacle avoidance parameters
-        self._obstacle_influence_radius = 0.7  # meters
-        self._obstacle_danger_radius = 0.3     # meters
-        self._gate_corridor_width = 0.4        # safe width for gate passage
-        self._gate_corridor_length = 1.5       # length of gate corridor
+        # Obstacle avoidance parameters - XY plane distances
+        self._obstacle_influence_radius = 0.6
+        self._obstacle_danger_radius = 0.3  # obstacle(10cm) + drone(10cm)
+        self._gate_corridor_width = 0.4
+        self._gate_corridor_length = 0.6  # Reduced from 1.5m to avoid overlap
         
         # Tracking parameters
         self._detected_gates = {}
         self._detected_obstacles = {}
-        self._active_gate_idx = None  # currently passing through this gate
+        self._active_gate_idx = None
         
         # Waypoint updates
-        self._waypoint_update_rate = 0.6
+        self._waypoint_update_rate = 0.7
         self._waypoint_targets = {}
         
         # Initial waypoints
@@ -90,37 +90,124 @@ class MPCAvoidanceController(Controller):
         self._tick = 0
         self._finished = False
         
-        print("\n" + "="*60)
-        print("MPC LOCAL AVOIDANCE CONTROLLER INITIALIZED")
         print("="*60)
         print(f"MPC horizon: {self._mpc_horizon} steps ({self._mpc_horizon * self._dt:.2f}s)")
         print(f"Sample directions: {self._mpc_sample_directions}")
         print(f"Initial waypoints: {len(self._original_waypoints)}")
         print("="*60 + "\n")
 
+    def _check_waypoint_safety(self, pos: np.ndarray, obstacles: list, 
+                              gate_pos: np.ndarray = None) -> tuple[bool, float]:
+        """Check if a waypoint position is safe (>20cm from obstacles).
+        
+        If gate_pos is provided, also check the path from gate to waypoint.
+        """
+        min_dist = float('inf')
+        
+        for obs_info in obstacles:
+            obs_pos = obs_info['pos']
+            
+            # Check point distance
+            dist = np.linalg.norm(pos[:2] - obs_pos[:2])
+            min_dist = min(min_dist, dist)
+            
+            # If gate position provided, check path distance
+            if gate_pos is not None:
+                seg_vec = pos[:2] - gate_pos[:2]
+                seg_length = np.linalg.norm(seg_vec)
+                
+                if seg_length > 1e-6:
+                    seg_dir = seg_vec / seg_length
+                    to_obs = obs_pos[:2] - gate_pos[:2]
+                    proj_length = np.dot(to_obs, seg_dir)
+                    proj_length = np.clip(proj_length, 0, seg_length)
+                    
+                    closest_point = gate_pos[:2] + proj_length * seg_dir
+                    path_dist = np.linalg.norm(closest_point - obs_pos[:2])
+                    min_dist = min(min_dist, path_dist)
+        
+        is_safe = min_dist >= 0.25
+        return is_safe, min_dist
+
+    def _generate_safe_approach_exit(self, gate_pos: np.ndarray, gate_normal: np.ndarray, 
+                                     distance: float, obstacles: list) -> np.ndarray:
+        """Generate safe approach/exit point, avoiding obstacles if needed."""
+        # Try default position
+        default_pos = gate_pos + distance * gate_normal
+        default_pos[2] = gate_pos[2]
+        
+        # Check both point safety and path safety
+        is_safe, min_dist = self._check_waypoint_safety(default_pos, obstacles, gate_pos)
+        if is_safe:
+            return default_pos
+        
+        # Try lateral offsets
+        perpendicular = np.array([-gate_normal[1], gate_normal[0], 0.0])
+        if np.linalg.norm(perpendicular) > 1e-6:
+            perpendicular = perpendicular / np.linalg.norm(perpendicular)
+        
+        best_pos = default_pos
+        best_dist = min_dist
+        
+        for sign in [1, -1]:
+            for offset in [0.3, 0.4, 0.5, 0.6, 0.7]:  # Extended to 0.7m
+                test_pos = gate_pos + distance * gate_normal + sign * offset * perpendicular
+                test_pos[2] = gate_pos[2]
+                
+                is_safe, test_dist = self._check_waypoint_safety(test_pos, obstacles, gate_pos)
+                if is_safe:
+                    return test_pos
+                
+                # Track best even if not fully safe
+                if test_dist > best_dist:
+                    best_dist = test_dist
+                    best_pos = test_pos
+        
+        # Return best effort with warning
+        return best_pos
+
     def _generate_waypoints(self) -> np.ndarray:
         """Generate initial waypoints."""
         waypoints = []
-        waypoints.append(np.array([-1.5, 0.75, 0.05]))
+        waypoints.append(np.array([-1.5, 0.75, 0.01])) # Start
         
-        for gate in self._nominal_gates:
+        for i, gate in enumerate(self._nominal_gates):
             gate_pos = gate['pos']
             gate_rpy = gate['rpy']
             rot = R.from_euler('xyz', gate_rpy)
             gate_normal = rot.as_matrix()[:, 0]
             
-            # Approach
-            approach = gate_pos - 0.8 * gate_normal
-            approach[2] = gate_pos[2]
+            # Safe approach point
+            approach = self._generate_safe_approach_exit(
+                gate_pos, -gate_normal, 0.8, self._nominal_obstacles
+            )
             waypoints.append(approach)
             
             # Center
             waypoints.append(gate_pos.copy())
             
-            # Exit
-            exit_pt = gate_pos + 0.6 * gate_normal
-            exit_pt[2] = gate_pos[2]
+            # Safe exit point
+            exit_pt = self._generate_safe_approach_exit(
+                gate_pos, gate_normal, 0.8, self._nominal_obstacles
+            )
             waypoints.append(exit_pt)
+            
+            # SPECIAL: Add intermediate point after Gate2 to avoid obstacle C during climb
+            if i == 2:  # After Gate 2 (0-indexed)
+                # Gate2 is at z=0.7, Gate3 approach will be higher
+                # Add intermediate point that is safe from obstacle C
+                intermediate = exit_pt.copy()
+                intermediate[2] = 0.7  # Keep low initially
+                
+                # Move further away from obstacle direction
+                # Gate2 faces west (-1,0,0), obstacle C is west of gate
+                # So move intermediate point in perpendicular direction (north/south)
+                if exit_pt[1] > gate_pos[1]:  # Already offset north
+                    intermediate[1] += 0.3  # Move further north
+                else:  # Offset south
+                    intermediate[1] -= 0.3  # Move further south
+                    
+                waypoints.append(intermediate)
         
         # Final
         waypoints.append(waypoints[-1] + np.array([0.3, 0.0, 0.0]))
@@ -169,7 +256,7 @@ class MPCAvoidanceController(Controller):
         
         for _ in range(self._mpc_horizon):
             # Simple acceleration towards target velocity
-            acc = (target_vel - vel) * 2.0  # proportional control
+            acc = (target_vel - vel) * 1.5
             vel = vel + acc * self._dt
             pos = pos + vel * self._dt
             trajectory.append(pos.copy())
@@ -186,18 +273,36 @@ class MPCAvoidanceController(Controller):
         tracking_error = np.linalg.norm(final_pos - des_pos)
         cost += 10.0 * tracking_error
         
-        # Obstacle costs
+        # Obstacle costs using XY distance
         for pos in trajectory:
             for obs_info in obstacles:
                 obs_pos = obs_info['pos']
-                dist = np.linalg.norm(pos - obs_pos)
                 
-                if dist < self._obstacle_danger_radius:
-                    # Very high penalty for collision
-                    cost += 1000.0 * (self._obstacle_danger_radius - dist)
-                elif dist < self._obstacle_influence_radius:
-                    # Moderate penalty for being close
-                    cost += 50.0 * (self._obstacle_influence_radius - dist)
+                # Use XY plane distance (obstacle is a vertical pole, not a 3D point)
+                dist = np.linalg.norm(pos[:2] - obs_pos[:2])
+                
+                # Check if Z is in obstacle height range
+                if 0.0 <= pos[2] <= 1.6:
+                    if dist < self._obstacle_danger_radius:
+                        # Very high penalty for collision
+                        cost += 1000.0 * (self._obstacle_danger_radius - dist)
+                    elif dist < self._obstacle_influence_radius:
+                        # Moderate penalty for being close
+                        cost += 50.0 * (self._obstacle_influence_radius - dist)
+        
+        # ADDED: Penalty for getting close to already-passed gates (avoid backward collision)
+        for gate_idx, gate_info in self._detected_gates.items():
+            gate_pos = gate_info['pos']
+            
+            # Check if this is a recently passed gate (not the current target)
+            if gate_idx != self._active_gate_idx:
+                for pos in trajectory:
+                    # Check XY distance to gate center
+                    gate_dist = np.linalg.norm(pos[:2] - gate_pos[:2])
+                    
+                    # High penalty if getting close to a non-active gate
+                    if gate_dist < 0.5:  # 50cm danger zone around gates
+                        cost += 500.0 * (0.5 - gate_dist)
         
         # If in gate corridor, penalize lateral deviation heavily
         if in_gate_corridor:
@@ -225,6 +330,15 @@ class MPCAvoidanceController(Controller):
         if in_gate_corridor:
             return des_pos
         
+        # Determine forward direction to avoid backward collision
+        forward_direction = des_pos[:2] - current_pos[:2]
+        forward_norm = np.linalg.norm(forward_direction)
+        if forward_norm > 1e-3:
+            forward_direction = forward_direction / forward_norm
+        else:
+            # Use velocity direction
+            forward_direction = des_vel[:2] / (np.linalg.norm(des_vel[:2]) + 1e-6)
+        
         # Sample different velocity directions
         best_offset = np.zeros(2)
         best_cost = float('inf')
@@ -235,18 +349,29 @@ class MPCAvoidanceController(Controller):
         baseline_cost = self._compute_trajectory_cost(baseline_traj, des_pos, obstacles, False)
         
         # Only search if baseline has obstacles
-        if baseline_cost > 100.0:  # has obstacle penalty
-            angles = np.linspace(0, 2*np.pi, self._mpc_sample_directions, endpoint=False)
+        if baseline_cost > 100.0:
+            # Limit sampling to forward hemisphere to avoid backward collision
+            angles = np.linspace(-np.pi*0.7, np.pi*0.7, self._mpc_sample_directions, endpoint=True)
             
             for angle in angles:
                 for dist in self._mpc_sample_distances:
                     # Offset in XY plane only
                     offset_xy = dist * np.array([np.cos(angle), np.sin(angle)])
-                    offset_3d = np.array([offset_xy[0], offset_xy[1], 0.0])
+                    
+                    # Rotate offset to align with forward direction
+                    forward_angle = np.arctan2(forward_direction[1], forward_direction[0])
+                    cos_f = np.cos(forward_angle)
+                    sin_f = np.sin(forward_angle)
+                    rotated_offset = np.array([
+                        offset_xy[0] * cos_f - offset_xy[1] * sin_f,
+                        offset_xy[0] * sin_f + offset_xy[1] * cos_f
+                    ])
+                    
+                    offset_3d = np.array([rotated_offset[0], rotated_offset[1], 0.0])
                     
                     # Target velocity towards offset position
                     target_pos = des_pos + offset_3d
-                    target_vel = (target_pos - current_pos) * 2.0  # proportional
+                    target_vel = (target_pos - current_pos) * 2.0
                     
                     # Predict trajectory
                     traj = self._predict_trajectory(current_pos, current_vel, target_vel)
@@ -256,7 +381,7 @@ class MPCAvoidanceController(Controller):
                     
                     if cost < best_cost:
                         best_cost = cost
-                        best_offset = offset_xy
+                        best_offset = rotated_offset
         
         # Apply offset (XY only, preserve Z)
         adjusted_pos = des_pos.copy()
@@ -339,7 +464,7 @@ class MPCAvoidanceController(Controller):
         if 'gates_pos' in obs and 'gates_quat' in obs:
             for i, gate_pos in enumerate(obs['gates_pos']):
                 if i not in self._detected_gates:
-                    if np.linalg.norm(gate_pos - current_pos) <= self._sensor_range:
+                    if np.linalg.norm(gate_pos[:2] - current_pos[:2]) <= self._sensor_range:
                         rot = R.from_quat(obs['gates_quat'][i])
                         gate_normal = rot.as_matrix()[:, 0]
                         
@@ -358,7 +483,7 @@ class MPCAvoidanceController(Controller):
         if 'obstacles_pos' in obs:
             for i, obs_pos in enumerate(obs['obstacles_pos']):
                 if i not in self._detected_obstacles:
-                    if np.linalg.norm(obs_pos - current_pos) <= self._sensor_range:
+                    if np.linalg.norm(obs_pos[:2]  - current_pos[:2]) <= self._sensor_range:
                         self._detected_obstacles[i] = {
                             'pos': obs_pos.copy()
                         }
@@ -369,25 +494,27 @@ class MPCAvoidanceController(Controller):
     def _update_gate_waypoints(self, gate_idx: int, gate_pos: np.ndarray, 
                                gate_normal: np.ndarray):
         """Update waypoints for a detected gate."""
-        # Find waypoints corresponding to this gate
-        # Assume structure: [start, approach_0, center_0, exit_0, approach_1, ...]
         base_idx = 1 + gate_idx * 3
         
         if base_idx + 2 < len(self._current_waypoints):
+            detected_obstacles = list(self._detected_obstacles.values())
+            
             # Approach waypoint
-            approach_target = gate_pos - 0.8 * gate_normal
-            approach_target[2] = gate_pos[2]
+            approach_target = self._generate_safe_approach_exit(
+                gate_pos, -gate_normal, 0.8, detected_obstacles
+            )
             self._waypoint_targets[base_idx] = approach_target
             
             # Center waypoint
             self._waypoint_targets[base_idx + 1] = gate_pos.copy()
             
-            # Exit waypoint
-            exit_target = gate_pos + 0.6 * gate_normal
-            exit_target[2] = gate_pos[2]
+            # Exit waypoint (increased distance for safety)
+            exit_target = self._generate_safe_approach_exit(
+                gate_pos, gate_normal, 0.8, detected_obstacles
+            )
             self._waypoint_targets[base_idx + 2] = exit_target
             
-            print(f"  Updated waypoints {base_idx}, {base_idx+1}, {base_idx+2}")
+            print(f"Updated waypoints {base_idx}, {base_idx+1}, {base_idx+2}")
 
     def episode_callback(self):
         """Reset for new episode."""
@@ -400,4 +527,3 @@ class MPCAvoidanceController(Controller):
         self._active_gate_idx = None
         self._current_waypoints = self._original_waypoints.copy()
         self._update_trajectory()
-        print("\n[EPISODE RESET] MPC Controller reset\n")
