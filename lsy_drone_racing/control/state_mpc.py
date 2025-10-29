@@ -59,14 +59,14 @@ class MPCAvoidanceController(Controller):
             })
         
         # MPC parameters
-        self._mpc_horizon = 15
-        self._mpc_sample_directions = 16
+        self._mpc_horizon = 10
+        self._mpc_sample_directions = 15
         self._mpc_sample_distances = [0.05, 0.10, 0.15, 0.20]
         
         # Obstacle avoidance parameters - XY plane distances
-        self._obstacle_influence_radius = 0.6
-        self._obstacle_danger_radius = 0.3  # obstacle(10cm) + drone(10cm)
-        self._gate_corridor_width = 0.7
+        self._obstacle_influence_radius = 0.5
+        self._obstacle_danger_radius = 0.25  # obstacle(10cm) + drone(10cm)
+        self._gate_corridor_width = 0.3
         self._gate_corridor_length = 0.6  # Reduced from 1.5m to avoid overlap
         
         # Tracking parameters
@@ -183,7 +183,7 @@ class MPCAvoidanceController(Controller):
             
             # Safe approach point
             approach = self._generate_safe_approach_exit(
-                gate_pos, -gate_normal, 0.8, self._nominal_obstacles
+                gate_pos, -gate_normal, 0.5, self._nominal_obstacles
             )
             waypoints.append(approach)
             
@@ -195,6 +195,7 @@ class MPCAvoidanceController(Controller):
                 gate_pos, gate_normal, 0.8, self._nominal_obstacles
             )
             waypoints.append(exit_pt)
+            
             
             # SPECIAL: Add intermediate point after Gate2 to avoid obstacle C during climb
             if i == 2:  # After Gate 2 (0-indexed)
@@ -212,10 +213,11 @@ class MPCAvoidanceController(Controller):
                     intermediate[1] -= 0.3  # Move further south
                     
                 waypoints.append(intermediate)
+            
         
         # Final
-        waypoints.append(waypoints[-1] + np.array([0.3, 0.0, 0.0]))
-        
+        # waypoints.append(waypoints[-1] + np.array([0.3, 0.0, 0.0]))
+
         return np.array(waypoints)
 
     def _update_trajectory(self):
@@ -511,8 +513,9 @@ class MPCAvoidanceController(Controller):
                 # Update if: (1) it's the first gate, OR (2) all previous gates detected
                 # AND either: (a) gate just detected, OR (b) new obstacle detected
                 should_update = (gate_idx == 0 or all_previous_detected) and (
-                    gate_idx in newly_detected_gates or 
-                    (newly_detected_obstacles and gate_idx in self._last_updated_gates)
+                    gate_idx in newly_detected_gates
+                    or (newly_detected_obstacles and gate_idx in self._last_updated_gates)
+                    or (all_previous_detected and gate_idx not in self._last_updated_gates)
                 )
                 
                 if should_update:
@@ -538,7 +541,7 @@ class MPCAvoidanceController(Controller):
             
             # Approach waypoint
             approach_target = self._generate_safe_approach_exit(
-                gate_pos, -gate_normal, 0.6, detected_obstacles
+                gate_pos, -gate_normal, 0.7, detected_obstacles
             )
             self._waypoint_targets[base_idx] = approach_target
             
@@ -547,7 +550,7 @@ class MPCAvoidanceController(Controller):
             
             # Exit waypoint (increased distance for safety)
             exit_target = self._generate_safe_approach_exit(
-                gate_pos, gate_normal, 0.6, detected_obstacles
+                gate_pos, gate_normal, 0.8, detected_obstacles
             )
             self._waypoint_targets[base_idx + 2] = exit_target
             
