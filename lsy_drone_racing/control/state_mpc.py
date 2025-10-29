@@ -59,15 +59,15 @@ class MPCAvoidanceController(Controller):
             })
         
         # MPC parameters
-        self._mpc_horizon = 10
-        self._mpc_sample_directions = 15
+        self._mpc_horizon = 15
+        self._mpc_sample_directions = 17
         self._mpc_sample_distances = [0.05, 0.10, 0.15, 0.20]
         
         # Obstacle avoidance parameters - XY plane distances
         self._obstacle_influence_radius = 0.5
         self._obstacle_danger_radius = 0.25  # obstacle(10cm) + drone(10cm)
         self._gate_corridor_width = 0.3
-        self._gate_corridor_length = 0.6  # Reduced from 1.5m to avoid overlap
+        self._gate_corridor_length = 0.6
         
         # Tracking parameters
         self._detected_gates = {}
@@ -214,9 +214,8 @@ class MPCAvoidanceController(Controller):
                     
                 waypoints.append(intermediate)
             
-        
         # Final
-        # waypoints.append(waypoints[-1] + np.array([0.3, 0.0, 0.0]))
+        waypoints.append(waypoints[-1] + np.array([0.3, 0.0, 0.0]))
 
         return np.array(waypoints)
 
@@ -541,7 +540,7 @@ class MPCAvoidanceController(Controller):
             
             # Approach waypoint
             approach_target = self._generate_safe_approach_exit(
-                gate_pos, -gate_normal, 0.7, detected_obstacles
+                gate_pos, -gate_normal, 0.8, detected_obstacles
             )
             self._waypoint_targets[base_idx] = approach_target
             
