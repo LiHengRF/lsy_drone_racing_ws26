@@ -59,15 +59,15 @@ class MPCAvoidanceController(Controller):
             })
         
         # MPC parameters
-        self._mpc_horizon = 15
-        self._mpc_sample_directions = 17
+        self._mpc_horizon = 20
+        self._mpc_sample_directions = 15
         self._mpc_sample_distances = [0.05, 0.10, 0.15, 0.20]
         
         # Obstacle avoidance parameters - XY plane distances
-        self._obstacle_influence_radius = 0.5
-        self._obstacle_danger_radius = 0.25  # obstacle(10cm) + drone(10cm)
-        self._gate_corridor_width = 0.3
-        self._gate_corridor_length = 0.6
+        self._obstacle_influence_radius = 0.8
+        self._obstacle_danger_radius = 0.35  # obstacle(10cm) + drone(10cm)
+        self._gate_corridor_width = 0.2
+        self._gate_corridor_length = 0.3
         
         # Tracking parameters
         self._detected_gates = {}
@@ -75,7 +75,7 @@ class MPCAvoidanceController(Controller):
         self._active_gate_idx = None
         
         # Waypoint updates
-        self._waypoint_update_rate = 0.7
+        self._waypoint_update_rate = 0.8
         self._waypoint_targets = {}
         
         # Initial waypoints
@@ -154,7 +154,7 @@ class MPCAvoidanceController(Controller):
         best_dist = min_dist
         
         for sign in [1, -1]:
-            for offset in [0.3, 0.4, 0.5, 0.6, 0.7]:  # Extended to 0.7m
+            for offset in [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7]:  # Extended to 0.7m
                 test_pos = gate_pos + distance * gate_normal + sign * offset * perpendicular
                 test_pos[2] = gate_pos[2]
                 
@@ -173,7 +173,7 @@ class MPCAvoidanceController(Controller):
     def _generate_waypoints(self) -> np.ndarray:
         """Generate initial waypoints."""
         waypoints = []
-        waypoints.append(np.array([-1.5, 0.75, 0.01])) # Start
+        waypoints.append(np.array([-1.5, 0.75, 0.05])) # Start
         
         for i, gate in enumerate(self._nominal_gates):
             gate_pos = gate['pos']
@@ -208,14 +208,15 @@ class MPCAvoidanceController(Controller):
                 # Gate2 faces west (-1,0,0), obstacle C is west of gate
                 # So move intermediate point in perpendicular direction (north/south)
                 if exit_pt[1] > gate_pos[1]:  # Already offset north
-                    intermediate[1] += 0.3  # Move further north
+                    intermediate[1] += 0.6  # Move further north
                 else:  # Offset south
-                    intermediate[1] -= 0.3  # Move further south
+                    intermediate[1] -= 0.6  # Move further south
                     
                 waypoints.append(intermediate)
             
+        
         # Final
-        waypoints.append(waypoints[-1] + np.array([0.3, 0.0, 0.0]))
+        # waypoints.append(waypoints[-1] + np.array([0.3, 0.0, 0.0]))
 
         return np.array(waypoints)
 
@@ -261,7 +262,7 @@ class MPCAvoidanceController(Controller):
         
         for _ in range(self._mpc_horizon):
             # Simple acceleration towards target velocity
-            acc = (target_vel - vel) * 1.5
+            acc = (target_vel - vel) * 2.0
             vel = vel + acc * self._dt
             pos = pos + vel * self._dt
             trajectory.append(pos.copy())
@@ -287,15 +288,15 @@ class MPCAvoidanceController(Controller):
                 dist = np.linalg.norm(pos[:2] - obs_pos[:2])
                 
                 # Check if Z is in obstacle height range
-                if 0.0 <= pos[2] <= 1.6:
+                if 0.0 <= pos[2] <= 1.5:
                     if dist < self._obstacle_danger_radius:
                         # Very high penalty for collision
                         cost += 1000.0 * (self._obstacle_danger_radius - dist)
                     elif dist < self._obstacle_influence_radius:
                         # Moderate penalty for being close
-                        cost += 50.0 * (self._obstacle_influence_radius - dist)
+                        cost += 100.0 * (self._obstacle_influence_radius - dist)
         
-        # ADDED: Penalty for getting close to already-passed gates (avoid backward collision)
+        # Penalty for getting close to already-passed gates (avoid backward collision)
         for gate_idx, gate_info in self._detected_gates.items():
             gate_pos = gate_info['pos']
             
@@ -315,7 +316,7 @@ class MPCAvoidanceController(Controller):
                 # Small lateral movements only
                 lateral_movement = np.linalg.norm(pos[:2] - trajectory[0][:2])
                 if lateral_movement > 0.1:
-                    cost += 100.0 * lateral_movement
+                    cost += 300.0 * lateral_movement
         
         return cost
 
@@ -437,7 +438,7 @@ class MPCAvoidanceController(Controller):
             
             # Recompute velocity towards adjusted position
             pos_error = des_pos - obs['pos']
-            des_vel = des_vel_ref + 1.0 * pos_error
+            des_vel = des_vel_ref + 0.8 * pos_error
         else:
             des_pos = des_pos_ref
             des_vel = des_vel_ref
@@ -510,7 +511,7 @@ class MPCAvoidanceController(Controller):
                 )
                 
                 # Update if: (1) it's the first gate, OR (2) all previous gates detected
-                # AND either: (a) gate just detected, OR (b) new obstacle detected
+                # and either: (a) gate just detected, OR (b) new obstacle detected
                 should_update = (gate_idx == 0 or all_previous_detected) and (
                     gate_idx in newly_detected_gates
                     or (newly_detected_obstacles and gate_idx in self._last_updated_gates)
@@ -525,7 +526,7 @@ class MPCAvoidanceController(Controller):
                         gate_info['normal']
                     )
                     self._last_updated_gates.add(gate_idx)
-                    print(f"  → Updated waypoints for Gate {gate_idx} (sequential order)")
+                    print(f"  → Updated waypoints for Gate {gate_idx}")
         
         self._last_obstacle_count = len(self._detected_obstacles)
         return self._finished
