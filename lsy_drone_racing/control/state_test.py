@@ -3,6 +3,9 @@ It uses a cubic spline interpolation to generate a smooth trajectory through way
 When gates are detected with changed positions, it updates the trajectory.
 When obstacles are detected, it applies lateral shifts to avoid collisions.
 PID control is used for accurate trajectory tracking.
+
+This version integrates improved waypoint generation methods including detour waypoints
+for backtracking gates.
 """
 from __future__ import annotations
 from typing import TYPE_CHECKING
@@ -35,37 +38,38 @@ class StateController(Controller):
             gate_rpy = np.array(gate["rpy"], dtype=float)
             rot = R.from_euler("xyz", gate_rpy)
             gate_normal = rot.as_matrix()[:, 0]  # x-axis points through gate
+            gate_y_axis = rot.as_matrix()[:, 1]  # y-axis width direction
+            gate_z_axis = rot.as_matrix()[:, 2]  # z-axis height direction
             
             self._gates.append({
                 "nominal_pos": gate_pos.copy(),
                 "nominal_normal": gate_normal.copy(),
-                "nominal_rpy": gate_rpy.copy(), # keep nominal rpy
+                "nominal_y_axis": gate_y_axis.copy(),
+                "nominal_z_axis": gate_z_axis.copy(),
+                "nominal_rpy": gate_rpy.copy(),
                 "detected_pos": None,
                 "detected_normal": None,
+                "detected_y_axis": None,
+                "detected_z_axis": None,
             })
         
         self._num_gates = len(self._gates)
         
-        # Gate traversal parameters
-        self._approach_dist = 0.45   # meters before gate center
-        self._exit_dist = 0.55       # meters after gate center
+        # Waypoint generation parameters
+        self._approach_dist = 0.5
+        self._num_intermediate_points = 5
+        self._angle_threshold = 120.0  # Degrees for backtracking detection
+        self._detour_distance = 0.65   # Distance for detour waypoints
 
-        # Gate2 special handling
-        self._gate2_idx = 2
-        self._exit_dist_gate2 = 0.3
-        self._climb_alt_gate2 = 1.25
-
-        # gate corridor half-width
+        # Gate corridor parameters
         self._gate_corridor_width = 0.3
 
-        # pitch lock threshold (deg + rad)
+        # Pitch lock threshold (deg + rad)
         self._pitch_lock_thresh_deg = 7.5
         self._pitch_lock_thresh = np.deg2rad(self._pitch_lock_thresh_deg)        
 
         # Obstacle avoidance parameters
-        self._avoidance_distance = 0.6
-        self._obstacle_radius = 0.15
-        self._safety_margin = 0.25
+        self._obstacle_safety_distance = 0.3
         
         # PID gains for trajectory tracking
         self._kp_pos = 2.5      # Position proportional gain
@@ -88,86 +92,314 @@ class StateController(Controller):
         self._build_trajectory()
         
         print("=" * 60)
-        print("Level 2 Controller with Gate Detection & Obstacle Avoidance")
+        print("Improved Controller with Detour Waypoints")
         print(f"Gates: {self._num_gates}")
         print(f"Total waypoints: {len(self._waypoints)}")
         print(f"PID Gains - Kp: {self._kp_pos}, Kd: {self._kd_pos}, Ki: {self._ki_pos}")
         print("=" * 60)
 
+    def _extract_gate_coordinate_frames(
+        self, 
+        gate_idx: int
+    ) -> tuple[NDArray[np.floating], NDArray[np.floating], NDArray[np.floating], NDArray[np.floating]]:
+        """Extract complete local coordinate frame for a gate.
+        
+        Args:
+            gate_idx: Index of the gate.
+            
+        Returns:
+            Tuple of (position, normal, y_axis, z_axis) where:
+            - position: Gate center position
+            - normal: Gate normal vector (x-axis, penetration direction)
+            - y_axis: Gate width direction (left-right)
+            - z_axis: Gate height direction (up-down)
+        """
+        gate = self._gates[gate_idx]
+        
+        # Use detected if available, else nominal
+        pos = gate["detected_pos"] if gate["detected_pos"] is not None else gate["nominal_pos"]
+        normal = gate["detected_normal"] if gate["detected_normal"] is not None else gate["nominal_normal"]
+        y_axis = gate["detected_y_axis"] if gate["detected_y_axis"] is not None else gate["nominal_y_axis"]
+        z_axis = gate["detected_z_axis"] if gate["detected_z_axis"] is not None else gate["nominal_z_axis"]
+        
+        return pos, normal, y_axis, z_axis
+
+    def calc_waypoints_from_gates(
+        self,
+        initial_position: NDArray[np.floating],
+    ) -> NDArray[np.floating]:
+        """Generate waypoints based on gate positions.
+        
+        Creates multiple waypoints around each gate to ensure smooth passage.
+        
+        Args:
+            initial_position: Starting position of the drone.
+            
+        Returns:
+            Array of waypoints including initial position.
+        """
+        waypoints_per_gate = []
+        
+        for i in range(self._num_intermediate_points):
+            # Interpolate from -approach_distance to +approach_distance
+            offset = -self._approach_dist + (i / (self._num_intermediate_points - 1)) * 2 * self._approach_dist
+            
+            gate_waypoints = []
+            for gate_idx in range(self._num_gates):
+                pos, normal, _, _ = self._extract_gate_coordinate_frames(gate_idx)
+                gate_waypoints.append(pos + offset * normal)
+            
+            waypoints_per_gate.append(np.array(gate_waypoints))
+        
+        # Reshape to (num_gates * num_intermediate_points, 3)
+        waypoints = np.concatenate(waypoints_per_gate, axis=1)
+        waypoints = waypoints.reshape(self._num_gates, self._num_intermediate_points, 3).reshape(-1, 3)
+        
+        # Prepend initial position
+        waypoints = np.vstack([initial_position, waypoints])
+        
+        return waypoints
+
+    def _add_detour_waypoints(
+        self,
+        waypoints: NDArray[np.floating],
+    ) -> NDArray[np.floating]:
+        """Add detour waypoints for gates that require backtracking.
+        
+        Args:
+            waypoints: Original waypoints array with shape (N, 3).
+            
+        Returns:
+            Modified waypoints array with detour waypoints inserted.
+        """
+        waypoints_list = list(waypoints)
+        inserted_count = 0
+        
+        print("\n=== Detour Waypoint Analysis ===")
+        
+        # Check each pair of consecutive gates
+        for i in range(self._num_gates - 1):
+            # Calculate indices accounting for previously inserted waypoints
+            last_idx_gate_i = 1 + (i + 1) * self._num_intermediate_points - 1 + inserted_count
+            first_idx_gate_i_plus_1 = 1 + (i + 1) * self._num_intermediate_points + inserted_count
+            
+            # Get the two waypoints
+            p1 = waypoints_list[last_idx_gate_i]
+            p2 = waypoints_list[first_idx_gate_i_plus_1]
+            
+            # Calculate vector from p1 to p2
+            v = p2 - p1
+            v_norm = np.linalg.norm(v)
+            
+            if v_norm < 1e-6:
+                print(f"\nGate {i} -> Gate {i+1}: Vector too short, skipping")
+                continue
+            
+            # Get gate i's coordinate frame
+            gate_center, normal_i, y_axis, z_axis = self._extract_gate_coordinate_frames(i)
+            
+            # Calculate angle between vector and gate i's normal
+            cos_angle = np.dot(v, normal_i) / v_norm
+            cos_angle = np.clip(cos_angle, -1.0, 1.0)
+            angle_deg = np.arccos(cos_angle) * 180 / np.pi
+            
+            print(f"\nGate {i} -> Gate {i+1}:")
+            print(f"  Vector length: {v_norm:.3f}m")
+            print(f"  Angle with gate {i} normal: {angle_deg:.1f}°")
+            
+            # Check if backtracking is detected
+            if angle_deg > self._angle_threshold:
+                print(f"  ⚠️  BACKTRACKING detected! Determining detour direction...")
+                
+                # Project vector v onto gate plane
+                v_proj = v - np.dot(v, normal_i) * normal_i
+                v_proj_norm = np.linalg.norm(v_proj)
+                
+                if v_proj_norm < 1e-6:
+                    # Default to right side
+                    detour_direction_vector = y_axis
+                    detour_direction_name = 'right (+y_axis) [default]'
+                    proj_angle_deg = 0.0
+                else:
+                    # Calculate components in local coordinate system
+                    v_proj_y = np.dot(v_proj, y_axis)
+                    v_proj_z = np.dot(v_proj, z_axis)
+                    
+                    # Calculate angle in gate plane
+                    proj_angle_deg = np.arctan2(v_proj_z, v_proj_y) * 180 / np.pi
+                    
+                    # Determine detour direction based on angle
+                    if -90 <= proj_angle_deg < 45:
+                        detour_direction_vector = y_axis
+                        detour_direction_name = 'right (+y_axis)'
+                    elif 45 <= proj_angle_deg < 135:
+                        detour_direction_vector = z_axis
+                        detour_direction_name = 'top (+z_axis)'
+                    else:
+                        detour_direction_vector = -y_axis
+                        detour_direction_name = 'left (-y_axis)'
+                    
+                    print(f"  Projection angle: {proj_angle_deg:.1f}° → Detour direction: {detour_direction_name}")
+                
+                # Calculate detour waypoint
+                detour_waypoint = gate_center + self._detour_distance * detour_direction_vector
+                
+                # Insert the detour waypoint
+                insert_position = last_idx_gate_i + 1
+                waypoints_list.insert(insert_position, detour_waypoint)
+                inserted_count += 1
+                
+                print(f"  Inserted detour waypoint at index {insert_position}")
+                print(f"  Detour coords: [{detour_waypoint[0]:.3f}, {detour_waypoint[1]:.3f}, {detour_waypoint[2]:.3f}]")
+            else:
+                print(f"  ✓ No backtracking detected, proceeding normally")
+        
+        print(f"\n=== Total detour waypoints added: {inserted_count} ===\n")
+        
+        return np.array(waypoints_list)
+
+    def _generate_trajectory(
+        self, 
+        duration: float, 
+        waypoints: NDArray[np.floating]
+    ) -> tuple[CubicSpline, CubicSpline, CubicSpline]:
+        """Generate cubic spline trajectory through waypoints.
+        
+        Uses arc-length parameterization for more uniform velocity distribution.
+        
+        Args:
+            duration: Total time duration for the trajectory.
+            waypoints: Array of 3D waypoints.
+            
+        Returns:
+            Tuple of (position_spline, velocity_spline, acceleration_spline).
+        """
+        # Calculate segment lengths
+        segment_vectors = np.diff(waypoints, axis=0)
+        segment_lengths = np.linalg.norm(segment_vectors, axis=1)
+        
+        # Cumulative arc length
+        cumulative_arc_length = np.concatenate([[0], np.cumsum(segment_lengths)])
+        
+        # Parameterize time by arc length for uniform velocity
+        time_parameters = cumulative_arc_length / cumulative_arc_length[-1] * duration
+        
+        pos_spline = CubicSpline(time_parameters, waypoints)
+        vel_spline = pos_spline.derivative(nu=1)
+        acc_spline = pos_spline.derivative(nu=2)
+        
+        return pos_spline, vel_spline, acc_spline
+
+    def _avoid_collisions(
+        self,
+        waypoints: NDArray[np.floating],
+        obstacle_positions: NDArray[np.floating],
+    ) -> NDArray[np.floating]:
+        """Modify trajectory to avoid collisions with obstacles.
+        
+        Args:
+            waypoints: Original waypoints.
+            obstacle_positions: Positions of obstacles.
+            
+        Returns:
+            Modified waypoints array.
+        """
+        if len(obstacle_positions) == 0:
+            return waypoints
+        
+        # Generate initial trajectory
+        pos_spline, _, _ = self._generate_trajectory(self._t_total, waypoints)
+        
+        # Sample trajectory at high resolution
+        time_samples = np.linspace(0, self._t_total, int(self._freq * self._t_total))
+        trajectory_points = pos_spline(time_samples)
+        
+        # Process each obstacle
+        for obstacle_position in obstacle_positions:
+            collision_free_times = []
+            collision_free_waypoints = []
+            
+            is_inside_obstacle = False
+            entry_index = None
+            
+            for i, point in enumerate(trajectory_points):
+                # Check distance in XY plane only
+                distance_xy = np.linalg.norm(obstacle_position[:2] - point[:2])
+                
+                if distance_xy < self._obstacle_safety_distance:
+                    if not is_inside_obstacle:
+                        is_inside_obstacle = True
+                        entry_index = i
+                        
+                elif is_inside_obstacle:
+                    # Exiting obstacle zone - compute avoidance waypoint
+                    exit_index = i
+                    is_inside_obstacle = False
+                    
+                    # Compute new waypoint direction
+                    entry_point = trajectory_points[entry_index]
+                    exit_point = trajectory_points[exit_index]
+                    
+                    entry_direction = entry_point[:2] - obstacle_position[:2]
+                    exit_direction = exit_point[:2] - obstacle_position[:2]
+                    avoidance_direction = entry_direction + exit_direction
+                    avoidance_direction /= np.linalg.norm(avoidance_direction)
+                    
+                    # Place new waypoint at safety distance
+                    new_position_xy = obstacle_position[:2] + avoidance_direction * self._obstacle_safety_distance
+                    new_position_z = (entry_point[2] + exit_point[2]) / 2
+                    new_waypoint = np.concatenate([new_position_xy, [new_position_z]])
+                    
+                    # Add at midpoint time
+                    collision_free_times.append((time_samples[entry_index] + time_samples[exit_index]) / 2)
+                    collision_free_waypoints.append(new_waypoint)
+                    
+                else:
+                    # Point is safe
+                    collision_free_times.append(time_samples[i])
+                    collision_free_waypoints.append(point)
+            
+            # Update for next obstacle
+            time_samples = np.array(collision_free_times)
+            trajectory_points = np.array(collision_free_waypoints)
+        
+        return trajectory_points
+
     def _is_in_gate_corridor(self, p: NDArray[np.floating]) -> bool:
         """Return True if point p is inside any gate's corridor segment."""
-        for i, g in enumerate(self._gates):
-            pos    = g["detected_pos"]    if g["detected_pos"]    is not None else g["nominal_pos"]
-            normal = g["detected_normal"] if g["detected_normal"] is not None else g["nominal_normal"]
+        for i in range(self._num_gates):
+            pos, normal, _, _ = self._extract_gate_coordinate_frames(i)
 
-            # Signed distance along the gate normal (s < 0: before gate, s > 0: after gate)
+            # Signed distance along the gate normal
             s = float(np.dot(p - pos, normal))
 
-            # Corridor length for this gate (gate2 has shorter exit segment)
-            exit_len = self._exit_dist_gate2 if i == self._gate2_idx else self._exit_dist
-
             # Inside the longitudinal bounds of the corridor?
-            if -self._approach_dist <= s <= exit_len:
-                # Lateral distance to the gate normal line (in 3D)
+            if -self._approach_dist <= s <= self._approach_dist:
+                # Lateral distance to the gate normal line
                 lateral_vec = (p - pos) - s * normal
                 if np.linalg.norm(lateral_vec) <= self._gate_corridor_width:
                     return True
         return False
 
-    def _get_gate_waypoints(self, gate_idx: int) -> list:
-        gate = self._gates[gate_idx]
-        # Use detected position if available, else nominal
-        pos    = gate["detected_pos"]    if gate["detected_pos"] is not None    else gate["nominal_pos"]
-        normal = gate["detected_normal"] if gate["detected_normal"] is not None else gate["nominal_normal"]
-
-        approach   = pos - self._approach_dist * normal
-        center     = pos.copy()
-
-        if gate_idx == self._gate2_idx:
-            exit_short = pos + self._exit_dist_gate2 * normal
-            climb_point = exit_short.copy()     # Climb point after gate2
-            climb_point[2] = self._climb_alt_gate2
-            # return [approach, center, exit_short, exit_short.copy(), climb_point]
-            return [approach, center, exit_short, climb_point]
-
-        exit_point = pos + self._exit_dist * normal
-        return [approach, center, exit_point]
-
     def _build_trajectory(self):
-        """Build spline trajectory through all gates."""
-        waypoints = []
+        """Build spline trajectory through all gates with detour waypoints."""
+        # Step 1: Generate basic waypoints
+        waypoints = self.calc_waypoints_from_gates(self._initial_pos)
+        print(f"Initial waypoints count: {len(waypoints)}")
         
-        # Starting position: use actual drone initial position
-        waypoints.append(self._initial_pos.copy())
+        # Step 2: Add detour waypoints for backtracking gates
+        waypoints = self._add_detour_waypoints(waypoints)
+        print(f"Waypoints after detour: {len(waypoints)}")
         
-        # Add smooth transition to first gate
-        first_gate_wps = self._get_gate_waypoints(0)
-        mid_to_first = (waypoints[0] + first_gate_wps[0]) / 2
-        waypoints.append(mid_to_first)
+        # Step 3: Apply collision avoidance
+        if hasattr(self, '_obstacle_positions') and len(self._obstacle_positions) > 0:
+            waypoints = self._avoid_collisions(waypoints, self._obstacle_positions)
         
-        # Add waypoints for each gate
-        for i in range(self._num_gates):
-            gate_wps = self._get_gate_waypoints(i)
-            waypoints.extend(gate_wps)
-            
-            # Add smooth transition between gates
-            if i < self._num_gates - 1:
-                next_gate_wps = self._get_gate_waypoints(i + 1)
-                mid_point = (gate_wps[-1] + next_gate_wps[0]) / 2
-                waypoints.append(mid_point)
+        self._waypoints = waypoints
         
-        # Final hover point after last gate
-        last_exit = waypoints[-1]
-        waypoints.append(last_exit + np.array([0.5, 0.0, 0.0], dtype=float))
-        
-        self._waypoints = np.array(waypoints, dtype=float)
-        
-        # Create splines
-        n = len(self._waypoints)
-        t = np.linspace(0, self._t_total, n)
-        self._des_pos_spline = CubicSpline(t, self._waypoints)
-        self._des_vel_spline = self._des_pos_spline.derivative(nu=1)
-        self._des_acc_spline = self._des_pos_spline.derivative(nu=2)
+        # Step 4: Generate smooth trajectory
+        self._des_pos_spline, self._des_vel_spline, self._des_acc_spline = \
+            self._generate_trajectory(self._t_total, self._waypoints)
         
         print(f"[Tick {self._tick}] Trajectory built with {len(self._waypoints)} waypoints")
 
@@ -187,24 +419,29 @@ class StateController(Controller):
             
             # First time detecting this gate
             if self._gates[i]["detected_pos"] is None:
-                # Get gate orientation
+                # Get gate orientation and extract complete coordinate frame
                 rot = R.from_quat(obs["gates_quat"][i])
                 det_euler = rot.as_euler("xyz")
                 nom_pitch = self._gates[i]["nominal_rpy"][1]
+                
                 if abs(det_euler[1] - nom_pitch) < self._pitch_lock_thresh:
-                    det_euler[1] = nom_pitch  # lock pitch to nominal
+                    det_euler[1] = nom_pitch
                     rot = R.from_euler("xyz", det_euler)
-
-                gate_normal = rot.as_matrix()[:, 0]
+                
+                rot_matrix = rot.as_matrix()
+                gate_normal = rot_matrix[:, 0]
+                gate_y_axis = rot_matrix[:, 1]
+                gate_z_axis = rot_matrix[:, 2]
                 
                 # Check if position changed significantly from nominal
                 pos_change = np.linalg.norm(gate_pos - self._gates[i]["nominal_pos"])
                 
-                # Store detected position
                 self._gates[i]["detected_pos"] = gate_pos.copy()
                 self._gates[i]["detected_normal"] = gate_normal.copy()
+                self._gates[i]["detected_y_axis"] = gate_y_axis.copy()
+                self._gates[i]["detected_z_axis"] = gate_z_axis.copy()
                 
-                if pos_change > 0.05:  # Significant change (>5cm)
+                if pos_change > 0.05:
                     print(f"[Tick {self._tick}] Gate {i} detected with {pos_change:.3f}m offset")
                     trajectory_updated = True
                 else:
@@ -215,7 +452,7 @@ class StateController(Controller):
             print(f"[Tick {self._tick}] Rebuilding trajectory with updated gates...")
             self._build_trajectory()
             self._last_update_tick = self._tick
-            # Reset integral on trajectory change to prevent windup
+            # Reset integral on trajectory change
             self._pos_error_integral = np.zeros(3, dtype=np.float32)
 
     def _lateral_obstacle_avoidance(
@@ -225,7 +462,7 @@ class StateController(Controller):
         des_vel: NDArray[np.floating],
         obstacles_pos: NDArray[np.floating]
     ) -> NDArray[np.floating]:
-        """Apply lateral shift to avoid obstacles."""
+        """Apply lateral shift to avoid obstacles (real-time adjustment)."""
         if len(obstacles_pos) == 0:
             return des_pos
         
@@ -239,39 +476,37 @@ class StateController(Controller):
         
         traj_direction = traj_direction / np.linalg.norm(traj_direction)
         
-        # Perpendicular direction (rotate 90 degrees)
+        # Perpendicular direction
         perp_direction = np.array([-traj_direction[1], traj_direction[0]])
         
         total_offset = np.zeros(2)
+        avoidance_distance = 0.6
+        obstacle_radius = 0.15
+        safety_margin = 0.25
         
         for obs_pos in obstacles_pos:
-            # Distance checks
             dist_to_drone = np.linalg.norm(obs_pos[:2] - current_pos[:2])
             dist_to_desired = np.linalg.norm(obs_pos[:2] - des_pos[:2])
             
-            if min(dist_to_drone, dist_to_desired) > self._avoidance_distance:
+            if min(dist_to_drone, dist_to_desired) > avoidance_distance:
                 continue
             
             # Check if obstacle is along trajectory
             to_obs = obs_pos[:2] - current_pos[:2]
             projection = np.dot(to_obs, traj_direction)
             
-            if projection < -0.2:  # Behind us
+            if projection < -0.2:
                 continue
             
             # Lateral distance from trajectory line
             lateral_dist = abs(np.dot(to_obs, perp_direction))
-            required_clearance = self._obstacle_radius + self._safety_margin
+            required_clearance = obstacle_radius + safety_margin
             
             if lateral_dist < required_clearance:
-                # Determine which side obstacle is on
                 obstacle_side = np.sign(np.dot(to_obs, perp_direction))
-                
-                # Calculate avoidance offset
-                avoidance_distance = required_clearance - lateral_dist
-                strength = 1.5 * avoidance_distance / required_clearance
+                avoidance_dist = required_clearance - lateral_dist
+                strength = 1.5 * avoidance_dist / required_clearance
                 offset = -obstacle_side * perp_direction * strength * 0.20
-                
                 total_offset += offset
         
         # Apply offset
@@ -288,18 +523,14 @@ class StateController(Controller):
         des_vel: NDArray[np.floating],
         des_acc: NDArray[np.floating]
     ) -> NDArray[np.floating]:
-        """Compute PID control for trajectory tracking.
-        
-        Returns:
-            Desired acceleration including feedforward and feedback terms
-        """
+        """Compute PID control for trajectory tracking."""
         # Position error
         pos_error = des_pos - current_pos
         
         # Velocity error
         vel_error = des_vel - current_vel
         
-        # Integral of position error (with anti-windup)
+        # Integral with anti-windup
         self._pos_error_integral += pos_error * self._dt
         self._pos_error_integral = np.clip(
             self._pos_error_integral,
@@ -308,13 +539,11 @@ class StateController(Controller):
         )
         
         # PID control law
-        # Feedforward: desired acceleration from trajectory
-        # Feedback: P term on position error + D term on velocity error + I term on integrated error
         acc_pid = (
-            des_acc +                                    # Feedforward
-            self._kp_pos * pos_error +                   # Proportional
-            self._kd_pos * vel_error +                   # Derivative
-            self._ki_pos * self._pos_error_integral      # Integral
+            des_acc +
+            self._kp_pos * pos_error +
+            self._kd_pos * vel_error +
+            self._ki_pos * self._pos_error_integral
         )
         
         return acc_pid
@@ -324,13 +553,17 @@ class StateController(Controller):
     ) -> NDArray[np.floating]:
         """Compute the next desired state with gate detection, obstacle avoidance, and PID."""
         
-        # Update gate detections (but not too frequently to avoid trajectory jumps)
+        # Store obstacle positions for trajectory building
+        if "obstacles_pos" in obs:
+            self._obstacle_positions = obs["obstacles_pos"]
+        
+        # Update gate detections
         early_phase = self._tick < int(5.0 * self._freq)
-        update_gap  = 5 if early_phase else 20 
+        update_gap = 5 if early_phase else 20
         if self._tick - self._last_update_tick > update_gap:
             self._update_gate_detections(obs)
         
-        # Get desired position, velocity, and acceleration from spline
+        # Get desired state from spline
         t = min(self._tick / self._freq, self._t_total)
         if t >= self._t_total:
             self._finished = True
@@ -339,9 +572,8 @@ class StateController(Controller):
         des_vel = self._des_vel_spline(t)
         des_acc = self._des_acc_spline(t)
         
-        # Apply lateral obstacle avoidance
+        # Apply real-time lateral obstacle avoidance (outside gate corridors)
         if "obstacles_pos" in obs and len(obs["obstacles_pos"]) > 0:
-            # skip (or weaken) avoidance when inside a gate corridor
             if not self._is_in_gate_corridor(des_pos):
                 des_pos = self._lateral_obstacle_avoidance(
                     des_pos,
@@ -350,7 +582,7 @@ class StateController(Controller):
                     obs["obstacles_pos"]
                 )
         
-        # Compute PID control for better tracking
+        # Compute PID control
         des_acc_pid = self._compute_pid_control(
             obs["pos"],
             obs["vel"],
@@ -359,11 +591,11 @@ class StateController(Controller):
             des_acc
         )
         
-        # State action: [pos(3), vel(3), acc(3), yaw(1), rrate(1), prate(1), yrate(1)]
+        # State action
         action = np.concatenate([
             des_pos,
             des_vel,
-            des_acc_pid,  # Use PID-computed acceleration
+            des_acc_pid,
             np.zeros(4, dtype=np.float32)
         ], dtype=np.float32)
         
@@ -395,10 +627,12 @@ class StateController(Controller):
         for gate in self._gates:
             gate["detected_pos"] = None
             gate["detected_normal"] = None
+            gate["detected_y_axis"] = None
+            gate["detected_z_axis"] = None
         
-        # Rebuild trajectory from nominal positions
+        # Rebuild trajectory
         self._build_trajectory()
         
         print("\n" + "=" * 60)
-        print("Episode Reset - Trajectory rebuilt from nominal positions")
+        print("Episode Reset - Trajectory rebuilt")
         print("=" * 60 + "\n")
