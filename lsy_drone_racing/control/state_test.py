@@ -490,7 +490,7 @@ class MyController(Controller):
         # === DEBUG: Store all detour waypoints that were actually added ===
         self._debug_detour_waypoints_added = []  # List of (gate_index, waypoint_coords) tuples
         
-        print("\n=== Detour Waypoint Analysis (Simplified: Right-side only) ===")
+        print("\n=== Waypoint Analysis ===")
         
         # Check each pair of consecutive gates
         for i in range(num_gates - 1):
@@ -549,7 +549,7 @@ class MyController(Controller):
             
             # Check if backtracking is detected (angle > threshold means going backwards)
             if angle_deg > angle_threshold:
-                print(f"  ⚠️  BACKTRACKING detected! Determining detour direction...")
+                print(f"BACKTRACKING detected. Determining detour direction...")
                 
                 # === DEBUG: Mark as needing detour ===
                 debug_info['needs_detour'] = True
@@ -636,7 +636,7 @@ class MyController(Controller):
                 print(f"  Inserted detour waypoint at index {insert_position}")
                 print(f"  Detour coords: [{detour_waypoint[0]:.3f}, {detour_waypoint[1]:.3f}, {detour_waypoint[2]:.3f}]")
             else:
-                print(f"  ✓ No backtracking detected, proceeding normally")
+                print(f"  No backtracking detected, proceeding normally")
                 debug_info['needs_detour'] = False
                 debug_info['inserted'] = False
             
