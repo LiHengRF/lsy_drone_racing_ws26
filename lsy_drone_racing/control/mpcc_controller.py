@@ -199,10 +199,14 @@ class MPCCController(Controller):
     def _plan_trajectory(self, obs: dict[str, NDArray[np.floating]]):
         """Plan or replan the trajectory."""
         print(f"[MPCC] Planning trajectory at T={self._step_count / self._ctrl_freq:.2f}s")
-        
+    
+        # --- NEU: für die Pfadplanung immer von der initialen Position ausgehen ---
+        obs_planning = obs.copy()
+        obs_planning['pos'] = self._initial_pos.copy()    
+            
         # Use path planner to generate trajectory
         result = self.path_planner.plan_trajectory(
-            obs,
+            obs_planning,
             trajectory_duration=self.mpcc_cfg.planned_duration,
             sampling_freq=self._ctrl_freq,
             for_mpcc=True,
