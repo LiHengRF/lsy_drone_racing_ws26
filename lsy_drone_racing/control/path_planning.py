@@ -39,14 +39,14 @@ class PathConfig:
     detour_distance: float = 0.65           # Distance from gate center for detour
     
     # Obstacle avoidance
-    safety_distance: float = 0.3            # Minimum distance from obstacles (meters)
+    safety_distance: float = 0.25            # Minimum distance from obstacles (meters)
     
     # Arc-length reparameterization
     arc_step: float = 0.05                  # Arc length sampling step
     arc_epsilon: float = 1e-5               # Convergence threshold
     
     # Trajectory extension
-    extend_length: float = 1.0              # Extension length at trajectory end
+    extend_length: float = 0.1              # Extension length at trajectory end
     
     # Visualization settings
     visualization_enabled: bool = True     # Enable/disable visualization
@@ -658,8 +658,8 @@ class PathPlanner:
         
         if for_mpcc:
             # Extend and reparametrize by arc length
-            extended = self.extend_spline(spline, extend_length=mpcc_extension_length)
-            arc_spline = self.reparametrize_by_arclength(extended)
+            # extended = self.extend_spline(spline, extend_length=mpcc_extension_length)
+            arc_spline = self.reparametrize_by_arclength(spline)
             total_length = float(arc_spline.x[-1])
             
             # Get gate parameters on arc-length trajectory
