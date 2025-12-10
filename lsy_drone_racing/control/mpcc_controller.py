@@ -39,7 +39,7 @@ if TYPE_CHECKING:
 class MPCCConfig:
     """Configuration for MPCC controller."""
     # MPC Horizon
-    N_horizon: int = 40                    # Number of horizon steps
+    N_horizon: int = 30                    # Number of horizon steps
     T_horizon: float = 0.7                 # Horizon time (seconds)
     
     # Arc-length model
@@ -56,14 +56,14 @@ class MPCCConfig:
     q_attitude: float = 1.0                # Attitude regularization
     
     # Control smoothness
-    r_thrust: float = 0.1                  # Thrust rate penalty
+    r_thrust: float = 0.2                  # Thrust rate penalty
     r_roll: float = 0.3                    # Roll rate penalty
     r_pitch: float = 0.3                   # Pitch rate penalty
     r_yaw: float = 0.50                     # Yaw rate penalty
     
     # Speed incentive
-    mu_speed: float = 4.0                   # Progress reward
-    w_speed_gate: float = 6.0               # Speed penalty at gates
+    mu_speed: float = 5.0                   # Progress reward
+    w_speed_gate: float = 9.0               # Speed penalty at gates
     
     # Safety bounds
     pos_bounds: tuple = (
@@ -552,7 +552,24 @@ class MPCCController(Controller):
         if self._detect_environment_change(obs):
             print(f"[MPCC] Environment change detected, replanning...")
             self._plan_trajectory(obs)
-            
+            # θ auf neue Trajektorie projizieren (nur nach vorne)
+            try:
+                theta_proj, _ = self.path_planner.find_closest_point(
+                    self.arc_trajectory, obs["pos"]
+                )
+                self.last_theta = max(self.last_theta, float(theta_proj))
+            except Exception as e:
+                print(f"[MPCC] Warning: could not project theta after replanning: {e}")
+
+                # self.last_theta = 0.0
+
+            """
+            # Warmstart zurücksetzen, damit der Solver zum neuen Pfad passt
+            if hasattr(self, "_x_warm"):
+                del self._x_warm
+            if hasattr(self, "_u_warm"):
+                del self._u_warm
+            """
             # Update solver parameters
             param_vec = self._encode_trajectory_params()
             for k in range(self.N + 1):
