@@ -39,7 +39,7 @@ class PathConfig:
     detour_distance: float = 0.65           # Distance from gate center for detour
     
     # Obstacle avoidance
-    safety_distance: float = 0.25            # Minimum distance from obstacles (meters)
+    safety_distance: float = 0.3            # Minimum distance from obstacles (meters)
     
     # Arc-length reparameterization
     arc_step: float = 0.05                  # Arc length sampling step
@@ -906,3 +906,4 @@ class PathVisualizer:
     def is_available(self) -> bool:
         """Check if visualization is available."""
         return self.enabled and self.visualizer is not None
+
