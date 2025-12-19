@@ -30,9 +30,9 @@ sim = [
     "gymnasium[array-api] >= 1.2.0",
     "ml-collections >= 1.0",
     "packaging >= 24.0",
-    "drone-models @ git+https://github.com/utiasDSL/drone-models.git@adr_ws25",
-    "drone-controllers @ git+https://github.com/utiasDSL/drone-controllers.git@adr_ws25",
-    "crazyflow @ git+https://github.com/utiasDSL/crazyflow.git@adr_ws25",
+    "drone-models",
+    "drone-controllers",
+    "crazyflow @ git+https://github.com/utiasDSL/crazyflow.git@0.1.0b0",
     "jax >= 0.7",
     "warp-lang",
 ]
@@ -41,7 +41,7 @@ gpu = ["jax[cuda12]"]
 # option[deploy]: deploy to real drones
 deploy = [
     "cfclient",
-    "drone-estimators @ git+https://github.com/utiasDSL/drone-estimators.git@adr_ws25",
+    "drone-estimators",
 ]
 # option[rl]: train rl policy
 rl = ["torch == 2.8.0", "wandb"]
@@ -54,6 +54,9 @@ lsy_drone_racing = ["envs/assets/*.xml"]
 
 [tool.pytest.ini_options]
 markers = ["unit", "integration"]
+
+[tool.ruff.lint.isort]  # Prevent ruff from reporting conflicting settings with isort
+split-on-trailing-comma = false
 
 [tool.ruff]
 # Exclude a variety of commonly ignored directories.
@@ -81,7 +84,7 @@ indent-width = 4
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E4", "E7", "E9", "F", "I", "D", "TCH", "ANN"]
+select = ["E", "F", "I", "D", "TCH", "ANN"]
 ignore = ["ANN401"]
 fixable = ["ALL"]
 unfixable = []
@@ -117,16 +120,24 @@ platforms = ["linux-64"]
 [tool.pixi.pypi-dependencies]
 lsy_drone_racing = { path = ".", editable = true }
 
-# feature[jazzy]
-[tool.pixi.feature.jazzy]
-channels = ["https://prefix.dev/robostack-jazzy"]
+# feature[kilted]
+[tool.pixi.feature.kilted]
+channels = ["https://prefix.dev/robostack-kilted"]
 
-[tool.pixi.feature.jazzy.dependencies]
-ros-jazzy-desktop = "*"
-colcon-common-extensions = "*"
+[tool.pixi.feature.kilted.dependencies]
+# Build tools
+compilers = "*"
+cmake = "*"
+pkg-config = "*"
+make = "*"
+ninja = "*"
+# ROS specific tools
 rosdep = "*"
+colcon-common-extensions = "*"
+# Kilted specific tools
+ros-kilted-desktop = "*"
 
-[tool.pixi.feature.jazzy.activation]
+[tool.pixi.feature.kilted.activation]
 scripts = ["tools/setup_mocap.sh"]
 
 [tool.pixi.activation]
@@ -153,9 +164,7 @@ pytest = "*"
 # environments
 [tool.pixi.environments]
 default = { features = ["sim"], solve-group = "default" }
-deploy = { features = [
-    "jazzy",
-] } # for deploy we must install everything else with pip
+deploy = { features = ["sim", "gpu", "kilted", "deploy"] }
 gpu = { features = ["sim", "gpu"], solve-group = "default" }
 online-submission = { features = [
     "sim",
@@ -165,13 +174,6 @@ tests = { features = ["sim", "rl", "tests"], solve-group = "default" }
 gpu-tests = { features = ["sim", "gpu", "tests"], solve-group = "default" }
 
 [tool.pixi.dependencies]
-# TODO: Remove compilers once scipy 1.17 is released and drone-models have been updated.
-# gcc = ">=15.1.0,<15.2"
-# cxx-compiler = ">=1.0.0,<2"
-# gfortran = ">=15.1.0,<15.2"
-# pkg-config = "*"
-# ninja = "*"
-# rosbags = ">=0.10.9,<0.11"
 openblas = ">=0.3.30,<0.4"
 ruff = "*"
 python = ">=3.11.12,<3.14"

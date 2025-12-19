@@ -7,7 +7,11 @@ We use the Crazyflie nano quadcopter for our challenge. It is a small, low-cost 
 
 The Track
 ---------
-Contrary to other drone racing challenges, we not only include gates in our tracks, but also obstacles designed to be avoided by the drones. The current iteration uses four gates and four obstacles. Gates have to be traversed in the correct order and in the correct direction. Passing a gate in the opposite direction will not count as a successful pass.
+Contrary to other drone racing challenges, this setup not only includes gates in the track but also obstacles that must be avoided by the drones. The current iteration consists of four gates and four obstacles. Gates must be traversed in the correct order and in the correct direction, as passing a gate in the opposite direction will not count as a successful pass. Once a gate has been successfully passed, traversing it again in reverse will not undo the completion; from that point on, the gate simply acts as another obstacle within the track.
+
+All details about the track elements are provided in the level files explained below. The track features two types of gates: tall gates and short gates. The tall gates have a height of 1.195 meters, while the short gates measure 0.695 meters. In both cases, the height is measured from the ground to the center of the gate. Each gate is square in shape, with an outer frame width of 0.72 meters and an inner opening width of 0.4 meters.
+
+The obstacles are designed as slender cylindrical poles with 0.03 meters in diameter. Each obstacle has a total height of 1.52 meters, measured from the ground to the top, and is fitted with a reflective marker mounted on top.
 
 Project Goals
 -------------
@@ -63,4 +67,6 @@ The challenge is divided into different difficulty levels, each specified by a T
 
 On level 0, we have perfect knowledge of the drones properties (mass, inertia) and the track layout. Merely some noise on the action and physics is applied. On level 1, physics parameters (mass, inertia, etc.) or the drone are randomized. At level 2, the position of the gates and obstacles is randomized around their nominal positions. Only when entering the observation range, the exact position is revealed. Finally, at level 3, unlike in level 2 where the nominal positions are known and hard coding a trajectory is possible, the (noisy) positions of gates and obstacles are only known at runtime and the controller must find the optimal path online.
 
-You may use the easier scenarios to develop and debug your controller. However, the final evaluation will be on the hardest scenario (Level 3) and, more importantly, the sim2real scenario.
+You may use the easier scenarios to develop and debug your controller. However, the final evaluation will be on the hardest scenarios (Level 2 & 3) and the corresponding sim2real transfer.
+
+In real-world deployment, the racing agents are given the nominal positions of the gates and obstacles, before they approach within a certain observation range and receive more accurate measurements, similar to simulation. For level 3, the track layout is generated reversely from randomly placed gates and obstacles in the real world.

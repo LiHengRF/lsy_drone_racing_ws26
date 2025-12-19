@@ -16,7 +16,7 @@ check_drone_start_pos = true
 real_track_objects = true
 
 [[deploy.drones]]
-id = 91
+id = 10
 channel = 100
 drone_model = "cf21B_500"                        # Model of the drone, i.e., cf2x_L250, cf2x_P250, cf2x_T500, cf21B_500. For this course, we use cf21B_500
 
@@ -49,6 +49,7 @@ control_mode = "state"  # Control mode of the environment. Can be either "state"
 randomize = false
 
 # Tall gates: 1.195m height. Short gates: 0.695m height. Height is measured from the ground to the center of the gate.
+# Gates are square. Gates are 0.72m wide (outer dimensions of the frame) with a 0.4m wide opening.
 [[env.track.gates]]
 pos = [0.5 , 0.25, 0.7]
 rpy = [0.0, 0.0, -0.78]
@@ -63,6 +64,7 @@ pos = [0.0, -0.75, 1.2]
 rpy = [0.0, 0.0, 0.0]
 
 # Obstacle height: 1.52m + reflective marker on top. Height is measured from the ground to the top of the obstacle.
+# Obstacles are cylinders with a diameter of 0.03m.
 [[env.track.obstacles]]
 pos = [0.0, 0.75, 1.55]
 [[env.track.obstacles]]
