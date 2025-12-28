@@ -434,7 +434,7 @@ class TrajectoryVisualizer:
         from matplotlib.collections import LineCollection
 
         fig = plt.figure(figsize=(6.0, 7.0))
-        gs = fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.22)
+        gs = fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.30)
         ax_xy = fig.add_subplot(gs[0, 0])
         ax_xz = fig.add_subplot(gs[1, 0], sharex=ax_xy)
 
@@ -442,13 +442,14 @@ class TrajectoryVisualizer:
         ax_xy.set_xlabel("x [m]")
         ax_xy.set_ylabel("y [m]")
         ax_xy.grid(True, alpha=0.5)
-        ax_xy.set_aspect("equal", adjustable="datalim")
+        ax_xy.set_aspect("equal", adjustable="box")
         ax_xy.tick_params(axis="x", labelbottom=True)
         ax_xz.set_xlabel("x [m]")
         ax_xz.set_ylabel("z [m]")
         ax_xz.grid(True, alpha=0.5)
-        ax_xz.set_aspect("equal", adjustable="datalim")
+        ax_xz.set_aspect("equal", adjustable="box")
 
+        lc_xy = None
         if pos.shape[0] >= 2:
             def colored_line(ax, x, y, c):
                 pts = np.stack([x, y], axis=1)
@@ -460,9 +461,6 @@ class TrajectoryVisualizer:
 
             lc_xy = colored_line(ax_xy, pos[:, 0], pos[:, 1], speed)
             colored_line(ax_xz, pos[:, 0], pos[:, 2], speed)
-
-            cbar = fig.colorbar(lc_xy, ax=[ax_xy, ax_xz], fraction=0.035, pad=0.02)
-            cbar.set_label("speed [m/s]")
 
             # Start / end markers
             ax_xy.scatter(pos[0, 0], pos[0, 1], color="green", s=36, zorder=5, label="start")
@@ -478,6 +476,24 @@ class TrajectoryVisualizer:
         self._draw_obstacles_xy(ax_xy)
         self._draw_gates_xz(ax_xz)
         self._draw_obstacles_xz(ax_xz)
+
+        ax_xy.set_ylim(-1.5, 1.5)
+        ax_xz.set_ylim(0.0, 2.0)
+
+        ax_xy.set_xlim(-1.75, 1.75)
+        ax_xz.set_xlim(-1.75, 1.75)
+
+        if lc_xy is not None:
+            pos_xy = ax_xy.get_position()
+            pos_xz = ax_xz.get_position()
+            y0 = min(pos_xy.y0, pos_xz.y0)
+            y1 = max(pos_xy.y1, pos_xz.y1)
+            x1 = max(pos_xy.x1, pos_xz.x1)
+            cbar_pad = 0.02
+            cbar_width = 0.03
+            cax = fig.add_axes([x1 + cbar_pad, y0, cbar_width, y1 - y0])
+            cbar = fig.colorbar(lc_xy, cax=cax)
+            cbar.set_label("speed [m/s]")
 
         fig.savefig(out_path, dpi=200, bbox_inches="tight")
         plt.close(fig)
@@ -657,7 +673,7 @@ class TrajectoryVisualizer:
         if not self._mpl_ready:
             plt.ion()
             self._fig = plt.figure(figsize=(6.0, 7.0))
-            gs = self._fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.22)
+            gs = self._fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.30)
             self._ax_xy = self._fig.add_subplot(gs[0, 0])
             self._ax_xz = self._fig.add_subplot(gs[1, 0], sharex=self._ax_xy)
             self._mpl_ready = True
@@ -672,12 +688,12 @@ class TrajectoryVisualizer:
         self._ax_xy.set_xlabel("x [m]")
         self._ax_xy.set_ylabel("y [m]")
         self._ax_xy.grid(True, alpha=0.5)
-        self._ax_xy.set_aspect("equal", adjustable="datalim")
+        self._ax_xy.set_aspect("equal", adjustable="box")
         self._ax_xy.tick_params(axis="x", labelbottom=True)
         self._ax_xz.set_xlabel("x [m]")
         self._ax_xz.set_ylabel("z [m]")
         self._ax_xz.grid(True, alpha=0.5)
-        self._ax_xz.set_aspect("equal", adjustable="datalim")
+        self._ax_xz.set_aspect("equal", adjustable="box")
 
         if pos.shape[0] >= 2:
             pts_xy = np.stack([pos[:, 0], pos[:, 1]], axis=1)
@@ -704,6 +720,12 @@ class TrajectoryVisualizer:
         self._draw_obstacles_xy(self._ax_xy)
         self._draw_gates_xz(self._ax_xz)
         self._draw_obstacles_xz(self._ax_xz)
+
+        self._ax_xy.set_ylim(-1.5, 1.5)
+        self._ax_xz.set_ylim(0.0, 2.0)
+
+        self._ax_xy.set_xlim(-1.75, 1.75)
+        self._ax_xz.set_xlim(-1.75, 1.75)
 
         self._fig.canvas.draw()
         self._fig.canvas.flush_events()
