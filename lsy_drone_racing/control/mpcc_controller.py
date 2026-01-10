@@ -58,11 +58,11 @@ class MPCCConfig:
     r_thrust: float = 0.2                  # Thrust rate penalty
     r_roll: float = 0.3                    # Roll rate penalty
     r_pitch: float = 0.3                   # Pitch rate penalty
-    r_yaw: float = 0.50                     # Yaw rate penalty
+    r_yaw: float = 0.50                    # Yaw rate penalty
     
     # Speed incentive
-    mu_speed: float = 16.0                   # Progress reward
-    w_speed_gate: float = 5.0               # Speed penalty at gates
+    mu_speed: float = 18.0                  # Progress reward
+    w_speed_gate: float = 9.0               # Speed penalty at gates
     
     # Safety bounds
     pos_bounds: tuple = (
@@ -173,7 +173,6 @@ class MPCCController(Controller):
         """Plan or replan the trajectory."""
         print(f"[MPCC] Planning trajectory at T={self._step_count / self._ctrl_freq:.2f}s")
     
-        # --- NEU: für die Pfadplanung immer von der initialen Position ausgehen ---
         obs_planning = obs.copy()
         obs_planning['pos'] = self._initial_pos.copy()    
             
@@ -706,5 +705,3 @@ class MPCCController(Controller):
         if hasattr(self, "arc_trajectory"):
             return self.last_theta / self.arc_trajectory.x[-1]
         return 0.0
-
-
