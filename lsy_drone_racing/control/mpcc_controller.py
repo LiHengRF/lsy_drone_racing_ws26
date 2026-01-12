@@ -121,7 +121,7 @@ class MPCCController(Controller):
         self.finished = False
         
         # Load dynamics parameters
-        self._dyn_params = load_params("so_rpy", config.sim.drone_model)
+        self._dyn_params = load_params("so_rpy_rotor_drag", config.sim.drone_model)
         self._mass = float(self._dyn_params["mass"])
         self._gravity = -float(self._dyn_params["gravity_vec"][-1])
         self.hover_thrust = self._mass * self._gravity
@@ -264,11 +264,19 @@ class MPCCController(Controller):
         # Dynamic parameters
         mass = self._mass
         gravity = self._gravity
-        
-        # Rate model parameters (from system identification)
-        params_pitch_rate = [-6.003842038081178, 6.213752925707588]
-        params_roll_rate = [-3.960889336015948, 4.078293254657104]
-        params_yaw_rate = [-0.005347588299390372, 0.0]
+
+        # Rate model parameters derived from drone-models
+        k = np.array(self._dyn_params["rpy_coef"], dtype=float)          # [k_roll, k_pitch, k_yaw]
+        d = np.array(self._dyn_params["rpy_rates_coef"], dtype=float)    # [d_roll, d_pitch, d_yaw]
+        b = np.array(self._dyn_params["cmd_rpy_coef"], dtype=float)      # [b_roll, b_pitch, b_yaw]
+
+        eps = 1e-9  # avoid divide-by-zero
+        a = -k / (d + eps)
+        beta = -b / (d + eps)
+
+        params_roll_rate  = [float(a[0]), float(beta[0])]
+        params_pitch_rate = [float(a[1]), float(beta[1])]
+        params_yaw_rate   = [float(a[2]), float(beta[2])]
         
         # State variables
         self.px = MX.sym("px")
