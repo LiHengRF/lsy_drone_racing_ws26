@@ -38,7 +38,7 @@ if TYPE_CHECKING:
 class MPCCConfig:
     """Configuration for MPCC controller."""
     # MPC Horizon
-    N_horizon: int = 40                    # Number of horizon steps
+    N_horizon: int = 30                    # Number of horizon steps
     T_horizon: float = 0.7                 # Horizon time (seconds)
     
     # Arc-length model
@@ -61,7 +61,7 @@ class MPCCConfig:
     r_yaw: float = 0.50                    # Yaw rate penalty
     
     # Speed incentive
-    mu_speed: float = 10.0                  # Progress reward
+    mu_speed: float = 12.0                  # Progress reward
     w_speed_gate: float = 9.0               # Speed penalty at gates
     
     # Safety bounds
@@ -713,4 +713,5 @@ class MPCCController(Controller):
         if hasattr(self, "arc_trajectory"):
             return self.last_theta / self.arc_trajectory.x[-1]
         return 0.0
+
 
