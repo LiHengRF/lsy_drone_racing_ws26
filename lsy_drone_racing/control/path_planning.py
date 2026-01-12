@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 class PathConfig:
     """Configuration for path planning."""
     # Waypoint generation
-    approach_distance: float = 0.5          # Distance before/after gate center
+    approach_distance: float = 0.6          # Distance before/after gate center
     num_intermediate_points: int = 5        # Points around each gate
     
     # Detour settings
@@ -685,4 +685,5 @@ class PathPlanner:
         obs = obs.copy()
         obs['pos'] = current_position
         
+
         return self.plan_trajectory(obs, **kwargs)
