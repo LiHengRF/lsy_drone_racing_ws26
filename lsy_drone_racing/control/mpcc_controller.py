@@ -43,7 +43,7 @@ class MPCCConfig:
     
     # Arc-length model
     model_arc_step: float = 0.05            # Arc length discretization
-    model_traj_length: float = 12.0         # Trajectory length in model
+    model_traj_length: float = 15.0         # Trajectory length in model
     
     # Cost function weights (tunable for speed/stability trade-off)
     # Higher values = more tracking accuracy (stability)
@@ -713,6 +713,7 @@ class MPCCController(Controller):
         if hasattr(self, "arc_trajectory"):
             return self.last_theta / self.arc_trajectory.x[-1]
         return 0.0
+
 
 
 
