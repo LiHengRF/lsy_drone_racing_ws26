@@ -61,7 +61,7 @@ class MPCCConfig:
     r_yaw: float = 0.50                    # Yaw rate penalty
     
     # Speed incentive
-    mu_speed: float = 18.0                  # Progress reward
+    mu_speed: float = 10.0                  # Progress reward
     w_speed_gate: float = 9.0               # Speed penalty at gates
     
     # Safety bounds
@@ -121,7 +121,7 @@ class MPCCController(Controller):
         self.finished = False
         
         # Load dynamics parameters
-        self._dyn_params = load_params("so_rpy_rotor_drag", config.sim.drone_model)
+        self._dyn_params = load_params("so_rpy", config.sim.drone_model)
         self._mass = float(self._dyn_params["mass"])
         self._gravity = -float(self._dyn_params["gravity_vec"][-1])
         self.hover_thrust = self._mass * self._gravity
@@ -713,3 +713,4 @@ class MPCCController(Controller):
         if hasattr(self, "arc_trajectory"):
             return self.last_theta / self.arc_trajectory.x[-1]
         return 0.0
+
