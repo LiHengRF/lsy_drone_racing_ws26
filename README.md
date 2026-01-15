@@ -132,11 +132,11 @@ The MPCC controller has been tested extensively on Level 2 and Level 3 configura
 
 Real-world flight demonstrations during lab session:
 
-<video src="docs/demo/level2.mp4" controls></video>
+[▶ Watch demo](docs/demo/level2.mp4)
 
-**VIDEO I: MPCC controller performance in Level 3**
+**VIDEO I: MPCC controller performance in Level 2**
 
-<video src="docs/demo/level3.mp4" controls></video>
+[▶ Watch demo](docs/demo/level3.mp4)
 
 
 **VIDEO II: MPCC controller performance in Level 3**
