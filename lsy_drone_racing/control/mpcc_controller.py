@@ -428,7 +428,7 @@ class MPCCController(Controller):
         tp_unit = tp_theta / (norm_2(tp_theta) + 1e-6)
         e_theta = position - pd_theta
         e_lag = dot(tp_unit, e_theta) * tp_unit  # Lag error (along path)
-        e_contour = e_theta - e_lag               # Contour error (perpendicular)
+        e_contour = e_theta - e_lag              # Contour error (perpendicular)
         
         # Tracking cost (with dynamic weights near gates)
         Q_w = cfg.q_attitude * DM(np.eye(3))
@@ -713,8 +713,3 @@ class MPCCController(Controller):
         if hasattr(self, "arc_trajectory"):
             return self.last_theta / self.arc_trajectory.x[-1]
         return 0.0
-
-
-
-
-
