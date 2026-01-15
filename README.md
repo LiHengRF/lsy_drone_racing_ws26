@@ -112,14 +112,14 @@ The simulation script has been extended with several new features:
 python scripts/sim_traj.py --config level2.toml --controller mpcc_controller.py -r -v
 
 # Run multiple episodes for statistics
-python scripts/sim_traj.py --config level2.toml --controller mpcc_controller.py --n 20
+python scripts/sim_traj.py --config level2.toml --controller mpcc_controller.py -n 20
 ```
 
 **Command-line options:**
 
 - `--config`: Configuration file (e.g., `level0.toml`, `level2.toml`);
 - `--controller`: Controller file to use (e.g., `mpcc_controller.py`);
-- `--n_runs`: Number of episodes to run;
+- `-n`: Number of episodes to run;
 - `-r` or `--render`: Enable GUI;
 - `-v`: Enable trajectory visualization.
 
