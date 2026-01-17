@@ -432,6 +432,7 @@ class TrajectoryVisualizer:
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from matplotlib.collections import LineCollection
+        from matplotlib import colors
 
         fig = plt.figure(figsize=(6.0, 7.0))
         gs = fig.add_gridspec(2, 1, height_ratios=[3, 2], hspace=0.30)
@@ -451,10 +452,17 @@ class TrajectoryVisualizer:
 
         lc_xy = None
         if pos.shape[0] >= 2:
+            speed_min = 0.0
+            speed_max = 2.3
+            speed_norm = colors.PowerNorm(gamma=0.6, vmin=speed_min, vmax=speed_max)
+            speed_cmap = plt.get_cmap("turbo")
+
             def colored_line(ax, x, y, c):
                 pts = np.stack([x, y], axis=1)
                 segs = np.stack([pts[:-1], pts[1:]], axis=1)
-                lc = LineCollection(segs, array=c[:-1], linewidths=3.0)
+                lc = LineCollection(
+                    segs, array=c[:-1], linewidths=3.0, cmap=speed_cmap, norm=speed_norm
+                )
                 ax.add_collection(lc)
                 ax.autoscale()
                 return lc
@@ -592,7 +600,7 @@ class TrajectoryVisualizer:
             from matplotlib.patches import Polygon
 
             ax.add_patch(
-                Polygon(outer, closed=True, fill=False, edgecolor="black", linewidth=2.5, zorder=3)
+                Polygon(outer, closed=True, fill=False, edgecolor="black", linewidth=2.3, zorder=3)
             )
             ax.add_patch(
                 Polygon(inner, closed=True, fill=False, edgecolor="black", linewidth=1.8, zorder=3)
@@ -667,6 +675,7 @@ class TrajectoryVisualizer:
         try:
             import matplotlib.pyplot as plt
             from matplotlib.collections import LineCollection
+            from matplotlib import colors
         except Exception:
             return
 
@@ -696,14 +705,22 @@ class TrajectoryVisualizer:
         self._ax_xz.set_aspect("equal", adjustable="box")
 
         if pos.shape[0] >= 2:
+            speed_min = 0.0
+            speed_max = 2.3
+            speed_norm = colors.PowerNorm(gamma=0.6, vmin=speed_min, vmax=speed_max)
+            speed_cmap = plt.get_cmap("turbo")
             pts_xy = np.stack([pos[:, 0], pos[:, 1]], axis=1)
             segs_xy = np.stack([pts_xy[:-1], pts_xy[1:]], axis=1)
-            lc_xy = LineCollection(segs_xy, array=speed[:-1], linewidths=3.0)
+            lc_xy = LineCollection(
+                segs_xy, array=speed[:-1], linewidths=3.0, cmap=speed_cmap, norm=speed_norm
+            )
             self._ax_xy.add_collection(lc_xy)
             self._ax_xy.autoscale()
             pts_xz = np.stack([pos[:, 0], pos[:, 2]], axis=1)
             segs_xz = np.stack([pts_xz[:-1], pts_xz[1:]], axis=1)
-            lc_xz = LineCollection(segs_xz, array=speed[:-1], linewidths=3.0)
+            lc_xz = LineCollection(
+                segs_xz, array=speed[:-1], linewidths=3.0, cmap=speed_cmap, norm=speed_norm
+            )
             self._ax_xz.add_collection(lc_xz)
             self._ax_xz.autoscale()
 
